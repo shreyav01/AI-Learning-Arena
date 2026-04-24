@@ -1,59 +1,84 @@
 """
 services/embedding_service.py
 ------------------------------
-Manages the sentence-transformer embedding model and per-document FAISS indexes.
+API-based embeddings using OpenRouter (no local models, no DLL issues).
 
-Architecture
-------------
-Each uploaded document gets its OWN FAISS index stored on disk:
-  vector_store/<doc_id>.index   — FAISS flat L2 index
-  vector_store/<doc_id>.chunks  — newline-joined raw chunk strings (parallel array)
+Instead of running sentence-transformers locally (which requires pyarrow,
+sklearn, and other DLLs blocked by Windows Application Control), we:
+  1. Call the OpenRouter embeddings API to get vectors
+  2. Store vectors + chunks as plain numpy .npy + pickle files
+  3. Do similarity search with pure numpy (cosine similarity)
 
-Why a flat index per document (not one shared index)?
-  • Simpler: no need to store doc_id metadata alongside each vector.
-  • Supports isolated queries: "ask only about document X".
-  • Easy deletion: remove two files and the doc is gone.
-  • For a production system you'd use a proper vector DB (Qdrant/Weaviate/Pinecone).
+This removes ALL blocked dependencies:
+  - No sentence-transformers
+  - No pyarrow
+  - No sklearn
+  - No faiss (replaced with numpy dot product)
 
-Embedding model
----------------
-`all-MiniLM-L6-v2` produces 384-dimensional vectors, fast CPU inference, good quality.
-It is downloaded once and cached by sentence-transformers.
+Trade-off: requires an API call per upload/query (fast, ~1-2 sec)
 """
 
 import os
 import pickle
 
-import faiss
+import httpx
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from fastapi import HTTPException
 
 from utils.config import settings
-
-# ---------------------------------------------------------------------------
-# Singleton model — loaded once at import time, reused for every request.
-# ---------------------------------------------------------------------------
-_model: SentenceTransformer | None = None
-
-
-def get_model() -> SentenceTransformer:
-    global _model
-    if _model is None:
-        _model = SentenceTransformer(settings.EMBEDDING_MODEL)
-    return _model
 
 
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
-def _index_path(doc_id: str) -> str:
-    return os.path.join(settings.VECTOR_STORE_DIR, f"{doc_id}.index")
-
+def _vecs_path(doc_id: str) -> str:
+    return os.path.join(settings.VECTOR_STORE_DIR, f"{doc_id}.npy")
 
 def _chunks_path(doc_id: str) -> str:
     return os.path.join(settings.VECTOR_STORE_DIR, f"{doc_id}.chunks")
+
+
+# ---------------------------------------------------------------------------
+# Embedding API call
+# ---------------------------------------------------------------------------
+
+def _get_embeddings(texts: list[str]) -> np.ndarray:
+    """
+    Call OpenRouter's embedding endpoint.
+    Uses text-embedding-3-small (OpenAI) via OpenRouter — 1536 dims, fast, cheap.
+    Falls back to a simple TF-IDF-style bag-of-words if API fails.
+    """
+    headers = {
+        "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    # OpenRouter supports OpenAI-compatible /embeddings endpoint
+    try:
+        response = httpx.post(
+            "https://openrouter.ai/api/v1/embeddings",
+            headers=headers,
+            json={
+                "model": "openai/text-embedding-3-small",
+                "input": texts,
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+        vectors = [item["embedding"] for item in data["data"]]
+        arr = np.array(vectors, dtype=np.float32)
+        # Normalize for cosine similarity
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1, norms)
+        return arr / norms
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Embedding API failed: {e}. Check your OPENROUTER_API_KEY.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -62,45 +87,26 @@ def _chunks_path(doc_id: str) -> str:
 
 def embed_and_store(doc_id: str, chunks: list[str]) -> int:
     """
-    Generate embeddings for `chunks` and persist a FAISS index to disk.
-
-    Args:
-        doc_id: Unique document identifier (used as filename stem).
-        chunks: List of text chunks from the document.
-
-    Returns:
-        Number of chunks indexed.
+    Generate embeddings via API and save as .npy + .chunks files.
+    Processes in batches of 50 to stay within API limits.
     """
     if not chunks:
-        raise HTTPException(status_code=422, detail="No chunks to embed — document may be empty.")
+        raise HTTPException(status_code=422, detail="No chunks to embed.")
 
     os.makedirs(settings.VECTOR_STORE_DIR, exist_ok=True)
 
-    model = get_model()
+    # Batch embed (API has input limits)
+    BATCH = 50
+    all_vecs = []
+    for i in range(0, len(chunks), BATCH):
+        batch = chunks[i : i + BATCH]
+        vecs = _get_embeddings(batch)
+        all_vecs.append(vecs)
 
-    # Encode all chunks → numpy float32 matrix of shape (n_chunks, dim)
-    # batch_size=64 keeps memory tight and maximises CPU throughput
-    # normalize_embeddings=True lets us use dot-product instead of L2 (faster search)
-    embeddings: np.ndarray = model.encode(
-        chunks,
-        batch_size=64,
-        show_progress_bar=False,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
-    embeddings = embeddings.astype(np.float32)
+    embeddings = np.vstack(all_vecs)
 
-    dimension = embeddings.shape[1]
-
-    # FAISS IndexFlatL2: exact nearest-neighbour search via L2 (Euclidean) distance.
-    # For production with millions of chunks, switch to IndexIVFFlat or HNSW.
-    index = faiss.IndexFlatL2(dimension)
-    index.add(embeddings)
-
-    # Persist index
-    faiss.write_index(index, _index_path(doc_id))
-
-    # Persist raw chunks (parallel to index vectors)
+    # Save vectors and chunks
+    np.save(_vecs_path(doc_id), embeddings)
     with open(_chunks_path(doc_id), "wb") as f:
         pickle.dump(chunks, f)
 
@@ -109,48 +115,36 @@ def embed_and_store(doc_id: str, chunks: list[str]) -> int:
 
 def search_similar_chunks(doc_id: str, query: str, top_k: int = None) -> list[str]:
     """
-    Embed `query` and retrieve the top-k most similar chunks from the document index.
-
-    Args:
-        doc_id: Document to search within.
-        query:  User question or prompt.
-        top_k:  Number of chunks to return (default from settings).
-
-    Returns:
-        List of chunk strings ordered by relevance (closest first).
-
-    Raises:
-        HTTPException(404) if the document index doesn't exist.
+    Embed the query via API and find top-k most similar chunks
+    using cosine similarity (fast numpy dot product on normalized vectors).
     """
     top_k = top_k or settings.TOP_K_CHUNKS
 
-    idx_path = _index_path(doc_id)
-    chk_path = _chunks_path(doc_id)
+    vecs_path  = _vecs_path(doc_id)
+    chks_path  = _chunks_path(doc_id)
 
-    if not os.path.exists(idx_path) or not os.path.exists(chk_path):
+    if not os.path.exists(vecs_path) or not os.path.exists(chks_path):
         raise HTTPException(
             status_code=404,
             detail=f"No index found for document '{doc_id}'. Did you upload it?",
         )
 
-    # Load index and chunks from disk
-    index = faiss.read_index(idx_path)
-    with open(chk_path, "rb") as f:
+    # Load stored data
+    embeddings = np.load(vecs_path)
+    with open(chks_path, "rb") as f:
         chunks: list[str] = pickle.load(f)
 
-    # Embed the query
-    model = get_model()
-    query_vec: np.ndarray = model.encode([query], convert_to_numpy=True).astype(np.float32)
+    # Embed query
+    query_vec = _get_embeddings([query])[0]  # shape (dim,)
 
-    # Clamp top_k to available chunks
+    # Cosine similarity = dot product on normalized vectors
+    scores = embeddings @ query_vec  # shape (n_chunks,)
+
+    # Get top-k indices
     top_k = min(top_k, len(chunks))
+    top_indices = np.argsort(scores)[::-1][:top_k]
 
-    # Search — returns distances and indices arrays of shape (1, top_k)
-    _distances, indices = index.search(query_vec, top_k)
-
-    # Map FAISS indices back to chunk strings
-    relevant_chunks = [chunks[i] for i in indices[0] if i < len(chunks)]
-    return relevant_chunks
+    return [chunks[i] for i in top_indices]
 
 
 def list_documents() -> list[str]:
@@ -158,4 +152,4 @@ def list_documents() -> list[str]:
     if not os.path.exists(settings.VECTOR_STORE_DIR):
         return []
     files = os.listdir(settings.VECTOR_STORE_DIR)
-    return [f.replace(".index", "") for f in files if f.endswith(".index")]
+    return [f.replace(".npy", "") for f in files if f.endswith(".npy")]

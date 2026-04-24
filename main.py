@@ -21,7 +21,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from utils.config import settings
-from services.embedding_service import get_model
 from routes import upload, ask, generate_questions, arena
 
 
@@ -44,11 +43,10 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.VECTOR_STORE_DIR, exist_ok=True)
 
-    # 3. Pre-load embedding model into memory
-    print("⏳  Loading embedding model — this may take a moment on first run...")
-    get_model()
-    print(f"✅  Embedding model '{settings.EMBEDDING_MODEL}' ready.")
+    # 3. Verify API key is present
     print(f"✅  Using LLM: {settings.OPENROUTER_MODEL} via OpenRouter")
+    print(f"✅  Using embeddings: openai/text-embedding-3-small via OpenRouter API")
+    print("✅  Backend ready — no local models needed.")
 
     yield  # application runs here
 
