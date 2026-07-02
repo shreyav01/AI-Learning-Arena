@@ -52,20 +52,27 @@ cd AI-Learning-Arena
 ### 2. Install dependencies
 
 ```bash
-cd notebooklm-backend
 python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+
+# macOS/Linux
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+
 pip install -r requirements.txt
 ```
 
 ### 3. Configure environment
 
 ```bash
-cp .env.example .env
-# Edit .env and add your OPENROUTER_API_KEY
+cp .env.example .env      # macOS/Linux
+
+# Windows
+copy .env.example .env
 ```
 
-Get a free API key at [openrouter.ai](https://openrouter.ai).
+Edit `.env` and add your API key.
 
 ### 4. Run the server
 
@@ -73,11 +80,12 @@ Get a free API key at [openrouter.ai](https://openrouter.ai).
 uvicorn main:app --reload --port 8000
 ```
 
-Visit **http://localhost:8000/docs** for the interactive Swagger UI.
+### 5. Open Swagger UI
 
----
+```text
+http://localhost:8000/docs
+```
 
-## API Reference
 
 ### `POST /upload`
 Upload a PDF and index it.
