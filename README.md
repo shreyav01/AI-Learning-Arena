@@ -42,6 +42,8 @@ notebooklm-backend/
 
 ## Quick Start
 
+## Quick Start
+
 ### 1. Clone the repository
 
 ```bash
@@ -66,13 +68,14 @@ pip install -r requirements.txt
 ### 3. Configure environment
 
 ```bash
-cp .env.example .env      # macOS/Linux
+# macOS/Linux
+cp .env.example .env
 
 # Windows
 copy .env.example .env
 ```
 
-Edit `.env` and add your API key.
+Edit `.env` and add your `OPENROUTER_API_KEY`.
 
 ### 4. Run the server
 
@@ -85,10 +88,6 @@ uvicorn main:app --reload --port 8000
 ```text
 http://localhost:8000/docs
 ```
-
-
-### `POST /upload`
-Upload a PDF and index it.
 
 **Form data:**
 | Field    | Type   | Required | Description                          |
