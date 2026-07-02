@@ -79,7 +79,7 @@ Edit `.env` and add your OpenRouter API key:
 OPENROUTER_API_KEY=your_api_key_here
 ```
 
-You can obtain a free API key from OpenRouter.
+You can obtain a free API key from [OpenRouter](https://openrouter.ai/).
 
 ### 4. Run the server
 
