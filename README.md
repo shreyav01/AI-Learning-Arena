@@ -42,7 +42,14 @@ notebooklm-backend/
 
 ## Quick Start
 
-### 1. Install dependencies
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/shreyav01/AI-Learning-Arena.git
+cd AI-Learning-Arena
+```
+
+### 2. Install dependencies
 
 ```bash
 cd notebooklm-backend
@@ -51,7 +58,7 @@ source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment
+### 3. Configure environment
 
 ```bash
 cp .env.example .env
@@ -60,7 +67,7 @@ cp .env.example .env
 
 Get a free API key at [openrouter.ai](https://openrouter.ai).
 
-### 3. Run the server
+### 4. Run the server
 
 ```bash
 uvicorn main:app --reload --port 8000
