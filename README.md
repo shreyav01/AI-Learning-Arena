@@ -75,8 +75,13 @@ cp .env.example .env
 copy .env.example .env
 ```
 
-Edit `.env` and add your `OPENROUTER_API_KEY`.
+Edit `.env` and add your OpenRouter API key:
 
+```env
+OPENROUTER_API_KEY=your_api_key_here
+```
+
+You can obtain a free API key from https://openrouter.ai/
 ### 4. Run the server
 
 ```bash
