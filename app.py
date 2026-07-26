@@ -372,6 +372,9 @@ for key, val in {
     "arena_question": None,
     "arena_question_meta": None,
     "arena_eval": None,
+    "upload_success": False,
+    "upload_message": None,
+    "upload_chunks": 0,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = val
@@ -389,16 +392,19 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if st.session_state.doc_id:
-    short_id = st.session_state.doc_id[:10] + "…"
     name = st.session_state.doc_name or "document"
+    tag = "✓ Uploaded just now" if st.session_state.upload_success else "● Document loaded"
+    tag_color = "#5a8a5a" if st.session_state.upload_success else "#5a8a5a"
     st.markdown(f"""
-    <div class="doc-bar">
+    <div class="doc-bar" style="background:#eaf4ea;border-bottom:1px solid #b0d0b0;">
         <div class="dot"></div>
-        <span>Active:&nbsp;<strong>{name}</strong></span>
-        <span style="color:#c0b8a0">·</span>
-        <span style="color:#a09070">{short_id}</span>
+        <span style="color:{tag_color};font-weight:500;">{tag}:</span>
+        <strong>{name}</strong>
     </div>
     """, unsafe_allow_html=True)
+    # Reset the just-uploaded flag after showing it once
+    if st.session_state.upload_success:
+        st.session_state.upload_success = False
 else:
     st.markdown("""
     <div class="doc-bar">
@@ -448,30 +454,59 @@ with tab1:
                     )
                     if resp.status_code == 200:
                         data = resp.json()
-                        st.session_state.doc_id    = data["doc_id"]
-                        st.session_state.doc_name  = uploaded_file.name
-                        st.session_state.answer    = None
+                        st.session_state.doc_id     = data["doc_id"]
+                        st.session_state.doc_name   = uploaded_file.name
+                        st.session_state.answer     = None
                         st.session_state.study_data = None
                         st.session_state.arena_eval = None
-                        st.success(f"✓  Indexed {data['total_chunks']} chunks from **{uploaded_file.name}**")
                         st.markdown(f"""
-                        <div style="background:#f5f1e6;border:1px solid #d0c8b6;border-radius:4px;
-                                    padding:1rem 1.3rem;margin-top:0.8rem;">
-                            <div style="font-family:'JetBrains Mono',monospace;font-size:0.6rem;
-                                        letter-spacing:0.18em;text-transform:uppercase;
-                                        color:#a09070;margin-bottom:0.4rem;">Document ID</div>
-                            <div style="font-family:'JetBrains Mono',monospace;font-size:0.85rem;
-                                        color:#1c1a17;word-break:break-all;">{data['doc_id']}</div>
+                        <div style="background:#eaf4ea;border:1px solid #5a8a5a;border-radius:6px;
+                                    padding:1.2rem 1.5rem;margin-top:0.8rem;">
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;
+                                        letter-spacing:0.12em;text-transform:uppercase;
+                                        color:#2a5a2a;margin-bottom:0.5rem;">✓ Uploaded successfully</div>
+                            <div style="font-family:'Source Serif 4',serif;font-size:0.95rem;
+                                        color:#1c1a17;margin-bottom:0.5rem;">
+                                <strong>{uploaded_file.name}</strong> — {data['total_chunks']} chunks indexed
+                            </div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;
+                                        color:#5a7a5a;">ID: {data['doc_id']}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                        st.caption("Switch to any tab to continue.")
+                        st.session_state.upload_success = True
+                        st.session_state.upload_message = uploaded_file.name
+                        st.session_state.upload_chunks  = data["total_chunks"]
+                        st.rerun()
                     else:
                         st.error(f"Upload failed ({resp.status_code}): {resp.json().get('detail','Unknown error')}")
                 except requests.exceptions.ConnectionError:
                     st.error("Cannot reach backend. Is it running at `http://127.0.0.1:8000`?")
                 except Exception as e:
                     st.error(f"Unexpected error: {e}")
-    else:
+    # Show persistent success card after upload
+    if st.session_state.doc_id and st.session_state.upload_message:
+        st.markdown(f"""
+        <div style="background:#eaf4ea;border:1px solid #5a8a5a;border-radius:6px;
+                    padding:1.2rem 1.5rem;margin-top:1rem;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;
+                        letter-spacing:0.12em;text-transform:uppercase;
+                        color:#2a5a2a;margin-bottom:0.5rem;">✓ &nbsp;Uploaded successfully</div>
+            <div style="font-family:'Source Serif 4',serif;font-size:0.95rem;
+                        color:#1c1a17;margin-bottom:0.5rem;">
+                <strong>{st.session_state.upload_message}</strong>
+                &nbsp;—&nbsp; {st.session_state.upload_chunks} chunks indexed
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:0.72rem;color:#5a7a5a;">
+                ID: {st.session_state.doc_id}
+            </div>
+        </div>
+        <div style="font-family:'Source Serif 4',serif;font-style:italic;
+                    font-size:0.85rem;color:#a09070;margin-top:0.6rem;">
+            Switch to Ask, Study or Arena tab to continue.
+        </div>
+        """, unsafe_allow_html=True)
+
+    if not uploaded_file:
         st.caption("Supported format: PDF · Text-based PDFs only")
 
 
